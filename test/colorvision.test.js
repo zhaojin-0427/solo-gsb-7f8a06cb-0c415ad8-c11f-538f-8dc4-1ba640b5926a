@@ -56,6 +56,13 @@ check('黑/白 ΔE76 = 100，同色 = 0', () => {
   assert.strictEqual(cv.deltaE76(cv.hexToLab('#123456'), cv.hexToLab('#123456')), 0);
 });
 
+check('rgbToLab（0–255 通道）与 hexToLab 一致', () => {
+  [[255, 255, 255, '#FFFFFF'], [0, 0, 0, '#000000'], [29, 78, 216, '#1D4ED8'], [230, 57, 70, '#E63946']]
+    .forEach(([r, g, b, hex]) => {
+      assert.deepStrictEqual(cv.rgbToLab(r, g, b), cv.hexToLab(hex));
+    });
+});
+
 // ---- 逐对审查 ----
 check('正常视图：黑白配对距离 100，不标记易混淆', () => {
   const r = cv.pairReview(

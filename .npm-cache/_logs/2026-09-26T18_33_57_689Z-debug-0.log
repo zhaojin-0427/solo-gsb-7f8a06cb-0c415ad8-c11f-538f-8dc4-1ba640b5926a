@@ -1,0 +1,39 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@10.8.2
+2 info using node@v20.20.2
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/workspace/.npmrc
+5 silly config load:file:/home/node/.npmrc
+6 silly config load:file:/usr/local/etc/npmrc
+7 verbose title npm install jsdom
+8 verbose argv "install" "--offline" "--no-save" "--cache" "/workspace/.npm-cache" "jsdom"
+9 verbose logfile logs-max:10 dir:/workspace/.npm-cache/_logs/2026-09-26T18_33_57_689Z-
+10 verbose logfile /workspace/.npm-cache/_logs/2026-09-26T18_33_57_689Z-debug-0.log
+11 silly packumentCache heap:549453824 maxSize:137363456 maxEntrySize:68681728
+12 silly logfile done cleaning log files
+13 silly idealTree buildDeps
+14 silly fetch manifest jsdom@*
+15 silly packumentCache full:https://registry.npmjs.org/jsdom cache-miss
+16 silly placeDep ROOT jsdom@ OK for: color-contrast-workbench@1.0.0 want: *
+17 verbose stack Error: request to https://registry.npmjs.org/jsdom failed: cache mode is 'only-if-cached' but no cached response is available.
+17 verbose stack     at cacheFetch (/usr/local/lib/node_modules/npm/node_modules/make-fetch-happen/lib/cache/index.js:12:13)
+17 verbose stack     at async fetch (/usr/local/lib/node_modules/npm/node_modules/make-fetch-happen/lib/fetch.js:98:7)
+17 verbose stack     at async RegistryFetcher.packument (/usr/local/lib/node_modules/npm/node_modules/pacote/lib/registry.js:90:19)
+17 verbose stack     at async RegistryFetcher.manifest (/usr/local/lib/node_modules/npm/node_modules/pacote/lib/registry.js:128:23)
+17 verbose stack     at async #fetchManifest (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js:1199:20)
+17 verbose stack     at async #nodeFromEdge (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js:1037:19)
+17 verbose stack     at async #buildDepStep (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js:901:11)
+17 verbose stack     at async Arborist.buildIdealTree (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js:181:7)
+17 verbose stack     at async Promise.all (index 1)
+17 verbose stack     at async Arborist.reify (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:131:5)
+18 error code ENOTCACHED
+19 error request to https://registry.npmjs.org/jsdom failed: cache mode is 'only-if-cached' but no cached response is available.
+20 silly unfinished npm timer reify 1790447637972
+21 silly unfinished npm timer reify:loadTrees 1790447637974
+22 verbose cwd /workspace
+23 verbose os Linux 6.8.0-88-generic
+24 verbose node v20.20.2
+25 verbose npm  v10.8.2
+26 verbose exit 1
+27 verbose code 1
+28 error A complete log of this run can be found in: /workspace/.npm-cache/_logs/2026-09-26T18_33_57_689Z-debug-0.log

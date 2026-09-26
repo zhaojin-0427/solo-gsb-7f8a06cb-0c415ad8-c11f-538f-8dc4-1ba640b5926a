@@ -26,6 +26,13 @@ const state = {
 let lastResult = null;
 let currentView = 'normal';
 
+// 截图配色核查状态（仅求解成功后可用；改动配色输入或重新求解时随 clearResult 清空）
+// auditState: null | { status:'loading'|'error'|'ready', fileName, message?,
+//   width, height, srcWidth, srcHeight, imageData, distances, validCount }
+let auditState = null;
+let auditTolerance = ScreenshotAudit.DEFAULT_TOLERANCE;
+let auditView = 'original'; // 'original'（原图）| 'mask'（半透明偏离遮罩）
+
 // ---------- 工具 ----------
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -574,9 +581,12 @@ function clientValidate(payload) {
 // ---------- 结果渲染 ----------
 const resultPanel = document.getElementById('result-panel');
 
-// 编辑颜色或约束时清除旧审查结果（旧方案已不再对应当前输入）
+// 编辑颜色或约束时清除旧审查结果（旧方案已不再对应当前输入），同时清除旧的截图核查
 function clearResult() {
   lastResult = null;
+  auditState = null;
+  auditTolerance = ScreenshotAudit.DEFAULT_TOLERANCE;
+  auditView = 'original';
   resultPanel.hidden = true;
   resultPanel.replaceChildren();
 }
@@ -697,6 +707,7 @@ function paintResult() {
       el('h3', {}, 'CSS 变量（按颜色录入顺序编号）'),
       cssWrap,
       buildTokenBlock(result.tokens),
+      buildAuditBlock(),
     ]),
   );
   resultPanel.hidden = false;
@@ -821,9 +832,255 @@ function buildReviewBlock(review) {
   ]);
 }
 
+// ---------- 截图配色核查 ----------
+// 偏离遮罩的叠加颜色与透明度（半透明红色，叠加在缩放后的原图上）
+const MASK_COLOR = [225, 29, 72];
+const MASK_ALPHA = 0.55;
+
+function buildAuditBlock() {
+  const container = el('div', { class: 'audit-block', id: 'audit-block' });
+  renderAudit(container);
+  return container;
+}
+
+// 由 auditState 重建整个核查区块（求解成功、切换色觉视图后随 paintResult 重绘）
+function renderAudit(container) {
+  const paletteChips = el('div', { class: 'audit-palette' }, [
+    el('span', { class: 'audit-palette-label' }, `对照色板（本次选中的 ${lastResult.picks.length} 个颜色）：`),
+    ...lastResult.picks.map((pick) => el('span', { class: 'mini-chip-wrap' }, [
+      el('span', { class: 'mini-chip', style: `background:${pick.value}` }),
+      el('code', {}, pick.value),
+    ])),
+  ]);
+
+  const fileInput = el('input', {
+    class: 'audit-file', type: 'file', accept: 'image/png,image/jpeg',
+    'aria-label': '选择 PNG 或 JPEG 截图',
+  });
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (file) loadAuditImage(file);
+    fileInput.value = ''; // 允许再次选择同一文件
+  });
+
+  const toleranceValue = el('span', { class: 'audit-tolerance-value' }, String(auditTolerance));
+  const slider = el('input', {
+    class: 'audit-tolerance', type: 'range',
+    min: String(ScreenshotAudit.TOLERANCE_MIN),
+    max: String(ScreenshotAudit.TOLERANCE_MAX),
+    step: '1', value: String(auditTolerance),
+    'aria-label': '偏离容差（ΔE76，5～40）',
+  });
+  slider.addEventListener('input', () => {
+    auditTolerance = Number(slider.value);
+    toleranceValue.textContent = String(auditTolerance);
+    if (auditState && auditState.status === 'ready') renderAuditResults();
+  });
+
+  container.replaceChildren(
+    el('h3', {}, '截图配色核查'),
+    el('p', { class: 'hint review-note' },
+      '选取本地 PNG/JPEG 截图，仅在浏览器内解码，图片不会上传。'
+      + `保持宽高比把最长边缩至 ${ScreenshotAudit.MAX_SIDE} 像素（不足则不放大），`
+      + '仅统计完全不透明（alpha = 255）的像素；像素与本次选中色值均转换为 D65 CIE Lab，'
+      + '逐像素取最近色的 ΔE76，未舍入距离大于容差'
+      + `（${ScreenshotAudit.TOLERANCE_MIN}～${ScreenshotAudit.TOLERANCE_MAX}，默认 ${ScreenshotAudit.DEFAULT_TOLERANCE}）即判为偏离。`),
+    paletteChips,
+    el('div', { class: 'audit-controls' }, [
+      fileInput,
+      el('div', { class: 'audit-tolerance-row' }, [
+        el('label', { class: 'audit-tolerance-label' }, '容差 ΔE76'),
+        slider,
+        toleranceValue,
+      ]),
+    ]),
+    el('div', { id: 'audit-results' }),
+  );
+  renderAuditResults();
+}
+
+// 只重绘结果区（加载状态 / 错误提示 / 统计与画布），不动文件选择与容差控件
+function renderAuditResults() {
+  const container = document.getElementById('audit-results');
+  if (!container) return;
+
+  if (!auditState) {
+    container.replaceChildren(el('p', { class: 'hint audit-status' },
+      '尚未选择图片。图片仅在本地解码，不会上传。'));
+    return;
+  }
+  if (auditState.status === 'loading') {
+    container.replaceChildren(el('p', { class: 'hint audit-status' },
+      `正在解码「${auditState.fileName}」并统计像素…`));
+    return;
+  }
+  if (auditState.status === 'error') {
+    container.replaceChildren(el('div', { class: 'audit-error' }, auditState.message));
+    return;
+  }
+
+  const summary = ScreenshotAudit.summarizeDeviation(auditState.distances, auditTolerance);
+  const total = auditState.width * auditState.height;
+  const scaled = auditState.srcWidth !== auditState.width || auditState.srcHeight !== auditState.height;
+  const scaleNote = scaled
+    ? `原图 ${auditState.srcWidth}×${auditState.srcHeight}，已保持宽高比缩至 ${auditState.width}×${auditState.height}。`
+    : `图片 ${auditState.width}×${auditState.height}，最长边未超过 ${ScreenshotAudit.MAX_SIDE} 像素，按原尺寸统计。`;
+  const pct = (summary.deviationRatio * 100).toFixed(2);
+
+  const viewSwitch = el('div', { class: 'vision-switch', role: 'group', 'aria-label': '核查视图' },
+    [['original', '原图'], ['mask', '偏离遮罩']].map(([key, label]) => el('button', {
+      type: 'button',
+      class: `vision-btn ${auditView === key ? 'active' : ''}`,
+      'data-audit-view': key,
+      'aria-pressed': auditView === key ? 'true' : 'false',
+    }, label)));
+
+  container.replaceChildren(
+    el('p', { class: 'hint audit-status' }, `文件：${auditState.fileName}。${scaleNote}`),
+    el('p', { class: `review-summary ${summary.deviantPixels > 0 ? 'has-risk' : ''}` },
+      `有效像素 ${summary.validPixels} / ${total}（完全不透明）；`
+      + `偏离 ${summary.deviantPixels} 像素，偏离比例 ${pct}%`
+      + `（容差 ΔE76 = ${auditTolerance}，未舍入最近色距离大于容差判为偏离）。`),
+    el('div', { class: 'audit-canvas-head' }, [viewSwitch]),
+    renderAuditCanvas(summary),
+    el('p', { class: 'hint audit-mask-note' }, auditView === 'mask'
+      ? '偏离遮罩：偏离像素以半透明红色叠加显示；透明像素不参与统计。'
+      : '当前为缩放后的原图；切换到「偏离遮罩」查看偏离像素的位置。'),
+  );
+}
+
+function renderAuditCanvas(summary) {
+  const { imageData } = auditState;
+  const canvas = el('canvas', {
+    class: 'audit-canvas',
+    width: String(auditState.width),
+    height: String(auditState.height),
+  });
+  const ctx = canvas.getContext('2d');
+  if (auditView === 'original') {
+    ctx.putImageData(imageData, 0, 0);
+    return canvas;
+  }
+  // 偏离遮罩：原图像素与半透明红色按 MASK_ALPHA 混合
+  const composited = new ImageData(
+    new Uint8ClampedArray(imageData.data), auditState.width, auditState.height);
+  const d = composited.data;
+  for (let i = 0; i < summary.deviant.length; i += 1) {
+    if (!summary.deviant[i]) continue;
+    const o = i * 4;
+    d[o] = Math.round(d[o] * (1 - MASK_ALPHA) + MASK_COLOR[0] * MASK_ALPHA);
+    d[o + 1] = Math.round(d[o + 1] * (1 - MASK_ALPHA) + MASK_COLOR[1] * MASK_ALPHA);
+    d[o + 2] = Math.round(d[o + 2] * (1 - MASK_ALPHA) + MASK_COLOR[2] * MASK_ALPHA);
+    d[o + 3] = 255;
+  }
+  ctx.putImageData(composited, 0, 0);
+  return canvas;
+}
+
+function readHeadBytes(file, count) {
+  const blob = file.slice(0, count);
+  if (typeof blob.arrayBuffer === 'function') {
+    return blob.arrayBuffer().then((buf) => new Uint8Array(buf));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result));
+    reader.onerror = () => reject(new Error('读取文件失败'));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+function decodeWithImgElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片解码失败')); };
+    img.src = url;
+  });
+}
+
+async function decodeImageFile(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file);
+    } catch {
+      return decodeWithImgElement(file); // 退化到 <img> 再试一次
+    }
+  }
+  return decodeWithImgElement(file);
+}
+
+async function loadAuditImage(file) {
+  if (!lastResult) return;
+  auditView = 'original';
+  auditState = { status: 'loading', fileName: file.name };
+  renderAuditResults();
+
+  const fail = (message) => {
+    auditState = { status: 'error', fileName: file.name, message };
+    renderAuditResults();
+  };
+
+  try {
+    const head = await readHeadBytes(file, 8);
+    if (!ScreenshotAudit.sniffImageFormat(head)) {
+      fail(`文件格式不支持：「${file.name}」不是 PNG 或 JPEG 图片（按文件头魔数判定，与扩展名无关）。`);
+      return;
+    }
+
+    let source;
+    try {
+      source = await decodeImageFile(file);
+    } catch {
+      fail(`图片解码失败：「${file.name}」可能已损坏，或不是有效的 PNG/JPEG 文件。`);
+      return;
+    }
+
+    const srcWidth = source.naturalWidth || source.width;
+    const srcHeight = source.naturalHeight || source.height;
+    if (!srcWidth || !srcHeight) {
+      fail(`图片解码失败：「${file.name}」的像素尺寸为空。`);
+      return;
+    }
+
+    const { width, height } = ScreenshotAudit.scaledSize(srcWidth, srcHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(source, 0, 0, width, height);
+    if (typeof source.close === 'function') source.close();
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const paletteLabs = lastResult.picks.map((pick) => ColorVision.hexToLab(pick.value));
+    const { validCount, distances } = ScreenshotAudit.pixelDeltaE(imageData.data, paletteLabs);
+    if (validCount === 0) {
+      fail(`「${file.name}」中没有完全不透明的像素（有效像素为 0），无法进行核查。`);
+      return;
+    }
+
+    auditState = {
+      status: 'ready', fileName: file.name,
+      width, height, srcWidth, srcHeight,
+      imageData, distances, validCount,
+    };
+    renderAuditResults();
+  } catch (err) {
+    fail(`截图核查失败：${err && err.message ? err.message : '未知错误'}`);
+  }
+}
+
 resultPanel.addEventListener('click', (e) => {
   const btn = e.target.closest('.vision-btn');
   if (!btn) return;
+  if (btn.dataset.auditView) {
+    auditView = btn.dataset.auditView;
+    renderAuditResults();
+    return;
+  }
   currentView = btn.dataset.view;
   paintResult();
 });

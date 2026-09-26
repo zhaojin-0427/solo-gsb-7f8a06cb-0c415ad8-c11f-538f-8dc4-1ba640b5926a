@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node test/solver.test.js && node test/colorvision.test.js && node test/tokens.test.js"
+    "test": "node test/solver.test.js && node test/colorvision.test.js && node test/tokens.test.js && node test/screenshot.test.js"
   },
   "dependencies": {
     "express": "^4.19.2"

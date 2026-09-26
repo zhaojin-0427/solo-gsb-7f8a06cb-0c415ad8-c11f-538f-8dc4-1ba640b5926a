@@ -17,6 +17,12 @@ app.get('/colorvision.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'src', 'colorvision.js'));
 });
 
+// 截图配色核查模块同样前后端共用（src/screenshot.js 为 UMD 格式）
+app.get('/screenshot.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'src', 'screenshot.js'));
+});
+
 // 内联 favicon，避免 404
 app.get('/favicon.ico', (req, res) => {
   res.redirect('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%231d4ed8%22/%3E%3C/svg%3E');

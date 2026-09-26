@@ -110,11 +110,10 @@
       : t / (3 * LAB_DELTA * LAB_DELTA) + 4 / 29;
   }
 
-  /** 模拟后的 sRGB 色块 -> CIE Lab（白点 D65） */
-  function hexToLab(hex) {
-    const rgb = hexToRgb01(hex).map(srgbDecode);
+  /** 线性 sRGB -> CIE Lab（白点 D65） */
+  function linearRgbToLab(linear) {
     const xyz = RGB_TO_XYZ.map((row) => (
-      row[0] * rgb[0] + row[1] * rgb[1] + row[2] * rgb[2]
+      row[0] * linear[0] + row[1] * linear[1] + row[2] * linear[2]
     ));
     const fx = labF(xyz[0] / WHITE_D65[0]);
     const fy = labF(xyz[1] / WHITE_D65[1]);
@@ -124,6 +123,16 @@
       a: 500 * (fx - fy),
       b: 200 * (fy - fz),
     };
+  }
+
+  /** sRGB 色值 #RRGGBB -> CIE Lab（白点 D65） */
+  function hexToLab(hex) {
+    return linearRgbToLab(hexToRgb01(hex).map(srgbDecode));
+  }
+
+  /** sRGB 通道（0–255）-> CIE Lab（白点 D65），供截图逐像素统计使用 */
+  function rgbToLab(r, g, b) {
+    return linearRgbToLab([r / 255, g / 255, b / 255].map(srgbDecode));
   }
 
   /** CIE76 色差 ΔE*ab（欧氏距离） */
@@ -184,6 +193,7 @@
     CONFUSABLE_THRESHOLD,
     simulateHex,
     hexToLab,
+    rgbToLab,
     deltaE76,
     isConfusable,
     formatDistance,
