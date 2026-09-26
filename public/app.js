@@ -577,6 +577,7 @@ const resultPanel = document.getElementById('result-panel');
 // 编辑颜色或约束时清除旧审查结果（旧方案已不再对应当前输入）
 function clearResult() {
   lastResult = null;
+  resetAudit();
   resultPanel.hidden = true;
   resultPanel.replaceChildren();
 }
@@ -697,6 +698,7 @@ function paintResult() {
       el('h3', {}, 'CSS 变量（按颜色录入顺序编号）'),
       cssWrap,
       buildTokenBlock(result.tokens),
+      buildAuditBlock(),
     ]),
   );
   resultPanel.hidden = false;
@@ -819,6 +821,267 @@ function buildReviewBlock(review) {
       ]),
     ]),
   ]);
+}
+
+// ---------- 截图配色核查 ----------
+// 全部在浏览器内完成：图片不上传；保持宽高比把最长边缩至 256px（更小的图不放大）；
+// 仅统计完全不透明（alpha = 255）的像素，逐像素与本次选中色值取 D65 Lab 最近色 ΔE76。
+const AUDIT_MAX_SIDE = 256;
+const AUDIT_MASK_ALPHA = 0.55; // 偏离遮罩的不透明度
+const AUDIT_MASK_RGB = [220, 38, 38]; // 偏离像素的遮罩颜色（半透明红）
+
+// 核查状态：随 clearResult 重置；切换色觉视图（不改变方案）时保留
+let auditState = null;
+let auditLoadSeq = 0; // 加载序号：使被取代或已清除的异步解码失效
+
+function resetAudit() {
+  auditLoadSeq += 1;
+  auditState = null;
+}
+
+function buildAuditBlock() {
+  const container = el('div', { class: 'audit-block' });
+  renderAuditBlock(container);
+  return container;
+}
+
+// 异步解码完成后结果面板可能已被重建，渲染时总是定位当前区块
+function refreshAudit() {
+  const container = document.querySelector('.audit-block');
+  if (container) renderAuditBlock(container);
+}
+
+function renderAuditBlock(container) {
+  const tol = ColorVision.AUDIT_TOLERANCE;
+  const st = auditState;
+  const tolerance = st ? st.tolerance : tol.DEFAULT;
+
+  const fileInput = el('input', {
+    type: 'file', accept: 'image/png,image/jpeg', style: 'display:none',
+    onchange: (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) loadAuditFile(file);
+      e.target.value = ''; // 允许再次选择同一文件
+    },
+  });
+
+  const toleranceInput = el('input', {
+    class: 'audit-tolerance-input', type: 'number',
+    min: String(tol.MIN), max: String(tol.MAX), step: '1', value: String(tolerance),
+    onchange: (e) => {
+      const raw = e.target.value.trim();
+      const v = raw === '' ? NaN : Number(raw);
+      const clamped = Number.isFinite(v)
+        ? Math.min(tol.MAX, Math.max(tol.MIN, Math.round(v)))
+        : tol.DEFAULT;
+      if (!auditState) {
+        auditState = { tolerance: clamped, view: 'original', fileName: null, error: null, stats: null };
+      } else {
+        auditState.tolerance = clamped;
+      }
+      if (auditState.opaquePixels) runAuditStats(); // 已有像素数据时按新容差重算
+      refreshAudit();
+    },
+  });
+
+  const children = [
+    el('h3', {}, '截图配色核查'),
+    el('p', { class: 'hint review-note' },
+      `选取本地 PNG/JPEG 截图，浏览器内解码，图片不上传；保持宽高比把最长边缩至 ${AUDIT_MAX_SIDE} 像素`
+      + '（更小的图不放大），仅统计完全不透明（alpha = 255）的像素；'
+      + '逐像素与本次选中色值在 D65 CIE Lab 空间取最近色 ΔE76，未舍入距离大于容差视为偏离。'),
+    el('div', { class: 'audit-controls' }, [
+      fileInput,
+      el('button', {
+        class: 'btn btn-secondary', type: 'button',
+        onclick: () => fileInput.click(),
+      }, st && st.fileName ? '重新选择截图…' : '选择截图…'),
+      el('label', { class: 'audit-tolerance' }, ['容差 ΔE76 ≤', toleranceInput]),
+      st && st.fileName ? el('span', { class: 'audit-file-name', title: st.fileName }, st.fileName) : null,
+    ]),
+  ];
+
+  if (st && st.error) {
+    children.push(el('p', { class: 'audit-message error' }, `✗ ${st.error}`));
+  } else if (st && st.stats) {
+    children.push(buildAuditResult(st));
+  } else if (st && st.fileName) {
+    children.push(el('p', { class: 'audit-message' }, '正在解码并统计…'));
+  }
+
+  container.replaceChildren(...children);
+}
+
+// 统计行 + 原图/偏离遮罩切换 + 画布
+function buildAuditResult(st) {
+  const pct = (st.stats.ratio * 100).toFixed(1);
+  const sizeNote = st.scaled
+    ? `已缩放至 ${st.width}×${st.height}（原图 ${st.origW}×${st.origH}）`
+    : `尺寸 ${st.width}×${st.height}（未缩放）`;
+
+  const viewSwitch = el('div', { class: 'vision-switch audit-view-switch', role: 'group', 'aria-label': '核查视图' },
+    [['original', '原图'], ['mask', '偏离遮罩']].map(([key, label]) => el('button', {
+      type: 'button',
+      class: `vision-btn ${st.view === key ? 'active' : ''}`,
+      'aria-pressed': st.view === key ? 'true' : 'false',
+      onclick: () => {
+        if (auditState) auditState.view = key;
+        refreshAudit();
+      },
+    }, label)));
+
+  const canvas = el('canvas', {
+    width: String(st.width), height: String(st.height),
+    role: 'img', 'aria-label': st.view === 'mask' ? '半透明偏离遮罩视图' : '缩放后的原图',
+  });
+  canvas.getContext('2d').putImageData(st.view === 'mask' ? st.maskImageData : st.imageData, 0, 0);
+
+  return el('div', { class: 'audit-result' }, [
+    el('p', { class: `audit-stats ${st.stats.deviant > 0 ? 'has-risk' : ''}` }, [
+      `有效像素 ${st.stats.total.toLocaleString()} 个（${sizeNote}）；`,
+      `偏离 ${st.stats.deviant.toLocaleString()} 个，占 ${pct}%`,
+      `（容差 ΔE76 > ${st.tolerance}）。`,
+    ]),
+    viewSwitch,
+    el('div', { class: 'audit-canvas-wrap' }, [canvas]),
+  ]);
+}
+
+async function loadAuditFile(file) {
+  const seq = ++auditLoadSeq;
+  const fileName = file.name || '（未命名文件）';
+
+  // 粗筛：MIME 类型或扩展名
+  const mimeOk = file.type === 'image/png' || file.type === 'image/jpeg';
+  const extOk = /\.(png|jpe?g)$/i.test(fileName);
+  if (!mimeOk && !extOk) {
+    beginAuditLoad(fileName);
+    auditState.error = `文件格式不支持：「${fileName}」不是 PNG 或 JPEG 图片。`;
+    refreshAudit();
+    return;
+  }
+
+  // 魔数校验：PNG = 89 50 4E 47，JPEG = FF D8 FF（防止改名伪装文件）
+  let formatOk = false;
+  try {
+    const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+    formatOk = (head.length >= 4 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E && head[3] === 0x47)
+      || (head.length >= 3 && head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF);
+  } catch {
+    formatOk = false;
+  }
+  if (seq !== auditLoadSeq) return;
+  if (!formatOk) {
+    beginAuditLoad(fileName);
+    auditState.error = `文件格式错误：「${fileName}」的文件头不是有效的 PNG 或 JPEG 数据。`;
+    refreshAudit();
+    return;
+  }
+
+  beginAuditLoad(fileName);
+  refreshAudit(); // 显示“正在解码并统计…”
+
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    if (seq !== auditLoadSeq) return;
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    if (!nw || !nh) {
+      auditState.error = '图片解码失败：无法读取图片尺寸。';
+      refreshAudit();
+      return;
+    }
+    try {
+      decodeAuditImage(img, nw, nh);
+    } catch (err) {
+      auditState.error = `图片处理失败：${err.message}`;
+    }
+    refreshAudit();
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    if (seq !== auditLoadSeq) return;
+    auditState.error = `图片解码失败：「${fileName}」可能已损坏或不是有效的 PNG/JPEG。`;
+    refreshAudit();
+  };
+  img.src = url;
+}
+
+// 开始一次新的加载：保留容差设置，丢弃旧的像素数据与统计
+function beginAuditLoad(fileName) {
+  const tolerance = auditState ? auditState.tolerance : ColorVision.AUDIT_TOLERANCE.DEFAULT;
+  auditState = {
+    tolerance,
+    view: 'original',
+    fileName,
+    error: null,
+    width: 0, height: 0, origW: 0, origH: 0, scaled: false,
+    imageData: null, opaquePixels: null, opaqueIndex: null,
+    stats: null, maskImageData: null,
+  };
+}
+
+// 缩放解码（最长边 256，仅缩小）并筛出完全不透明像素
+function decodeAuditImage(img, nw, nh) {
+  const scale = Math.min(1, AUDIT_MAX_SIDE / Math.max(nw, nh));
+  const w = Math.max(1, Math.round(nw * scale));
+  const h = Math.max(1, Math.round(nh * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, w, h);
+  const imageData = ctx.getImageData(0, 0, w, h);
+
+  const data = imageData.data;
+  const opaquePixels = []; // 连续 [r, g, b, ...]
+  const opaqueIndex = []; // 有效像素在图像中的像素下标（供遮罩定位）
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 255) {
+      opaquePixels.push(data[i], data[i + 1], data[i + 2]);
+      opaqueIndex.push(i / 4);
+    }
+  }
+
+  if (opaqueIndex.length === 0) {
+    auditState.error = '图片中没有完全不透明（alpha = 255）的有效像素，无法进行核查。';
+    return;
+  }
+
+  Object.assign(auditState, {
+    width: w, height: h, origW: nw, origH: nh, scaled: scale < 1,
+    imageData, opaquePixels, opaqueIndex,
+  });
+  runAuditStats();
+}
+
+// 按当前容差统计偏离并生成半透明偏离遮罩
+function runAuditStats() {
+  if (!auditState || !auditState.opaquePixels || !lastResult) return;
+  const palette = lastResult.picks.map((pick) => pick.value);
+  const res = ColorVision.auditPixels(auditState.opaquePixels, palette, auditState.tolerance);
+  auditState.stats = { total: res.total, deviant: res.deviant, ratio: res.ratio };
+  auditState.maskImageData = buildAuditMask(auditState, res.distances);
+  auditState.error = null;
+}
+
+// 原图之上，对偏离像素叠加半透明红色遮罩
+function buildAuditMask(st, distances) {
+  const mask = new ImageData(new Uint8ClampedArray(st.imageData.data), st.width, st.height);
+  const a = AUDIT_MASK_ALPHA;
+  const [mr, mg, mb] = AUDIT_MASK_RGB;
+  for (let k = 0; k < distances.length; k += 1) {
+    if (distances[k] > st.tolerance) {
+      const p = st.opaqueIndex[k] * 4;
+      mask.data[p] = mask.data[p] * (1 - a) + mr * a;
+      mask.data[p + 1] = mask.data[p + 1] * (1 - a) + mg * a;
+      mask.data[p + 2] = mask.data[p + 2] * (1 - a) + mb * a;
+    }
+  }
+  return mask;
 }
 
 resultPanel.addEventListener('click', (e) => {
