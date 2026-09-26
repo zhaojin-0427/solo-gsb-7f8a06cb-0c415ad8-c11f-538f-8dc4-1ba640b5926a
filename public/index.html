@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>界面配色工作台 · WCAG 对比度</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%231d4ed8%22/%3E%3C/svg%3E" />
+</head>
+<body>
+  <header class="site-header">
+    <h1>界面配色工作台</h1>
+    <p class="subtitle">编辑 2～8 个命名颜色，按 WCAG 2（sRGB 相对亮度）对比度约束自动选色</p>
+  </header>
+
+  <main class="container">
+    <section class="panel" aria-labelledby="colors-title">
+      <div class="panel-head">
+        <h2 id="colors-title">① 颜色候选</h2>
+        <button type="button" class="btn btn-secondary" id="add-color-btn">+ 添加颜色</button>
+      </div>
+      <p class="hint">每个颜色包含 1 个基准色和至多 3 个备选色；锁定基准色后该色不参与替换。色值均为 <code>#RRGGBB</code>。</p>
+      <div id="colors-list" class="colors-grid"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="constraints-title">
+      <div class="panel-head">
+        <h2 id="constraints-title">② 对比度约束</h2>
+        <button type="button" class="btn btn-secondary" id="add-constraint-btn">+ 添加约束</button>
+      </div>
+      <p class="hint">指定任意两个颜色之间的文字对比度下限（3、4.5 或 7，对应 WCAG 的 AA 大字 / AA / AAA）。</p>
+      <div id="constraints-list" class="constraints-list"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="tokens-title">
+      <div class="panel-head">
+        <h2 id="tokens-title">③ 语义色令牌</h2>
+        <button type="button" class="btn btn-secondary" id="add-token-btn">+ 添加令牌</button>
+      </div>
+      <p class="hint">可选，至多 12 个令牌；名称须匹配 <code>/^[a-z][a-z0-9-]*$/</code> 且不重名。每个令牌明确引用一个颜色或另一个令牌（允许前向引用）；求解成功后沿引用链解析到最终颜色，生成 <code>--role-名称: var(--color-N);</code> 声明（N 为颜色录入序号）。引用不存在、目标颜色已删除或出现循环时会在结果中标出，且禁止复制不完整的声明。</p>
+      <div id="tokens-list" class="tokens-list"></div>
+    </section>
+
+    <section class="action-bar">
+      <button type="button" class="btn btn-primary btn-large" id="solve-btn">求解配色方案</button>
+      <span class="action-note">求解在服务端完成：先最少替换数，再最小通道差，同分按候选序号取最小。</span>
+    </section>
+
+    <section id="error-panel" class="panel panel-error" hidden>
+      <h2>输入有误</h2>
+      <ul id="error-list"></ul>
+    </section>
+
+    <section id="result-panel" hidden></section>
+  </main>
+
+  <script src="/colorvision.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

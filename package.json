@@ -1,0 +1,17 @@
+{
+  "name": "color-contrast-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "description": "本地界面配色工作台：WCAG 2 对比度约束求解",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/solver.test.js && node test/colorvision.test.js && node test/tokens.test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

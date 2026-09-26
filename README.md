@@ -1,0 +1,198 @@
+# 界面配色工作台（Color Contrast Workbench）
+
+本地运行的界面配色工作台：Node.js + Express 后端 + 原生 HTML/CSS/JS 前端。
+按 [WCAG 2](https://www.w3.org/TR/WCAG22/#contrast-minimum) 的 sRGB 相对亮度公式计算文字对比度，
+在每个颜色的候选色中自动挑选满足全部约束的最优组合。
+
+## 快速开始
+
+需要本机安装 Docker（含 Compose 插件）。
+
+```bash
+docker compose up --build
+```
+
+启动后浏览器访问 <http://localhost:3000>。
+
+停止：`Ctrl+C`；后台运行：`docker compose up --build -d`。
+
+不使用 Docker 时也可直接运行（需要 Node.js ≥ 18）：
+
+```bash
+npm install
+npm start
+```
+
+## 功能说明
+
+- 编辑 **2～8 个命名颜色**；每个颜色包含：
+  - 1 个**基准色**
+  - 至多 **3 个备选色**（空槽位自动忽略）
+  - 可**锁定基准色**，锁定后该颜色不会被替换为备选色
+- 所有颜色值均为 `#RRGGBB`（六位十六进制）。
+- 为任意两个颜色添加**文字对比度下限**约束：`3`、`4.5` 或 `7`（分别对应
+  WCAG AA 大字、AA、AAA）。
+- 点击「求解配色方案」后，服务端枚举每个颜色的候选，找出满足全部约束的方案，
+  优化目标依次为：
+  1. **与基准色不同的颜色数最少**；
+  2. 所有颜色 **RGB 通道绝对差之和最小**；
+  3. 仍同分时，取各颜色**候选序号字典序最小**的组合
+     （候选 0 = 基准色，1～3 = 按录入顺序的备选色）。
+- **无解时明确提示**，并给出排查建议（解除锁定、增加备选、放宽下限等）。
+- 结果区展示：
+  - 各色块（颜色、名称、使用的候选序号、是否替换）；
+  - 每条约束的**实际对比度**与是否满足；
+  - 按颜色**录入顺序编号**的 CSS 变量（`--color-1`、`--color-2` …），一键复制。
+- **色觉辨识审查**（求解成功后展示）：
+  - 在 **正常视觉 / 红色盲（protanopia）/ 绿色盲（deuteranopia）** 三个视图间切换，
+    色块实时显示当前选中颜色在该视图下的模拟色；
+  - 对当前方案中选中的颜色**逐对**计算模拟色的 CIE Lab **ΔE76**（白点 D65），
+    以**未舍入**距离小于 **20** 标记为「易混淆」，表格列出双方名称、原色、模拟色
+    和保留一位小数的距离，按距离升序排列；
+  - 编辑任何颜色或约束后立即清除旧审查，需重新求解才会生成新结果；无解时不展示旧结果。
+- **语义色令牌**（可选，求解成功后解析，规则详见下文「语义色令牌」）：
+  - 至多维护 **12 个**令牌，每个令牌明确引用**一个颜色**或**另一个令牌**（允许前向引用）；
+  - 求解成功后沿引用链把每个令牌解析到最终选中的颜色，逐项展示令牌名、色值与完整引用链，
+    并生成可复制的 `--role-名称: var(--color-N);` 声明（N 为颜色录入序号）；
+  - 引用不存在、目标颜色已删除或出现循环时，标出错误令牌及引用路径，
+    并**禁止复制不完整的语义声明**；配色求解与色觉审查不受影响。
+- 输入校验（重复名称、自配对、非法色值、颜色数量越界等）前后端双重检查，
+  所有错误会列表展示并高亮对应输入项。
+
+> 注意：锁定只影响“求解时能否被替换”，基准色本身仍可自由编辑。
+
+## 语义色令牌
+
+令牌用于给求解结果中的颜色起**语义角色名**（如 `brand-primary`），规则如下：
+
+- **数量**：至多 **12** 个；完全空白的行（未填名称也未选目标）提交时自动忽略。
+- **名称**：必须匹配 `/^[a-z][a-z0-9-]*$/`（小写字母开头，仅含小写字母、数字、连字符），
+  且不得重名。名称非法、重名、超量、未选目标属于**输入校验错误**（前后端双重检查），
+  会阻止本次求解并高亮对应输入行。
+- **引用目标**（每个令牌必须明确二选一）：
+  - **引用颜色**：按颜色录入项引用（界面上下拉选择 `序号. 名称`）。
+    删除被引用的颜色后，令牌保留悬空引用，解析时标为「目标颜色已删除」；
+    颜色改名不影响引用。
+  - **引用令牌**：按令牌名引用另一个令牌，**允许前向引用**（可引用列表中靠后定义的令牌）。
+    被引用令牌改名或删除后，解析时标为「引用不存在」。
+- **解析**（仅在配色求解成功后进行，无解时不展示令牌结果）：
+  - 沿引用链逐级解析，直到某个颜色为止；链中出现**循环**（含自引用）会标出
+    `TOKEN_CYCLE` 及完整循环路径；
+  - 结果区逐项展示：**令牌名、最终色值、完整引用链**（如
+    `link → brand-primary → 颜色1「品牌蓝」`），错误行同时给出错误原因与路径；
+  - 为每个解析成功的令牌生成 CSS 声明：
+
+    ```css
+    --role-名称: var(--color-N);
+    ```
+
+    `N` 为该令牌最终解析到的颜色**录入序号**，与结果区 `--color-N` 变量一一对应；
+  - 只要存在解析失败的令牌，复制按钮即被禁用——**不完整的语义声明不可复制**，
+    修复后重新求解才能复制。
+- 编辑任何**颜色、约束或令牌**都会立即清除旧的解析结果，需重新求解。
+
+实现见 `src/tokens.js`（引用链解析）与 `src/validate.js`（结构校验），
+测试见 `test/tokens.test.js`。
+
+## WCAG 计算说明
+
+sRGB 通道先做线性化（`c ≤ 0.03928 ? c/12.92 : ((c+0.055)/1.055)^2.4`），
+相对亮度：
+
+```
+L = 0.2126·R + 0.7152·G + 0.0722·B
+```
+
+对比度：
+
+```
+(L_lighter + 0.05) / (L_darker + 0.05)
+```
+
+实现见 `src/wcag.js`。最大组合规模仅为 4^8 = 65 536，穷举即可。
+
+## 色觉辨识审查说明
+
+色觉模拟流程（红色盲 / 绿色盲视图）：
+
+1. sRGB 编码值线性化：`c ≤ 0.04045 ? c/12.92 : ((c+0.055)/1.055)^2.4`；
+2. 在线性 sRGB 空间乘以 **Machado 等人 2009 年模型的 100% 严重度矩阵**
+   （protanopia / deuteranopia 各一组 3×3 矩阵）；
+3. 裁剪到 `[0,1]` 后按 sRGB 传递函数重新编码为 `#RRGGBB`。
+   正常视图不做模拟，直接使用原色。
+
+矩阵来源：
+
+> Gustavo M. Machado, Manuel M. Oliveira, Leandro A. F. Fernandes,
+> *A Physiologically-based Model for Simulation of Color Vision Deficiency*,
+> IEEE Transactions on Visualization and Computer Graphics, 15(6), 2009.
+> （Table I，severity = 1.0；矩阵作用于线性 sRGB）
+
+距离计算：模拟后的 sRGB 色块先转换到 **CIE XYZ（sRGB 原色，白点 D65）**，再转到
+**CIE Lab**，ΔE76 即 Lab 空间欧氏距离：
+
+```
+ΔE76 = sqrt((ΔL*)² + (Δa*)² + (Δb*)²)
+```
+
+未舍入距离 **< 20** 的配对标记为「易混淆」。
+
+> 提示：Machado 矩阵是色觉模拟模型、ΔE76 < 20 也只是一个经验性的**辨识风险提示阈值**，
+> 既非医学诊断结论，也不是 WCAG 通过标准；实际可读性还受字号、字体、面积、光照等影响。
+
+实现见 `src/colorvision.js`（浏览器与 Node 共用的同一份 UMD 模块，测试见
+`test/colorvision.test.js`）。
+
+## 接口
+
+`POST /api/solve`
+
+请求示例：
+
+```json
+{
+  "colors": [
+    { "id": 1, "name": "品牌蓝", "base": "#1D4ED8", "alternatives": ["#1E40AF"], "locked": false },
+    { "id": 2, "name": "浅灰底", "base": "#F8FAFC", "alternatives": ["#FFFFFF"], "locked": false }
+  ],
+  "constraints": [
+    { "a": "品牌蓝", "b": "浅灰底", "minRatio": 7 }
+  ],
+  "tokens": [
+    { "name": "brand-primary", "target": { "kind": "color", "colorId": 1 } },
+    { "name": "link", "target": { "kind": "token", "token": "brand-primary" } }
+  ]
+}
+```
+
+- `colors[].id` 为可选的客户端稳定 id，供令牌按 `colorId` 引用颜色（不传则令牌无法定位颜色）。
+- `tokens` 可省略；`target.kind` 为 `color`（带 `colorId`）或 `token`（带目标令牌名 `token`）。
+- 合法且有解：`200 { "ok": true, "result": { "feasible": true, "picks": [...], ... } }`
+  - 提交了令牌时，`result.tokens` 附带解析结果：
+    `{ "items": [...], "okCount", "errorCount", "css" }`；
+    成功项含 `value / colorNumber / chain / css`，失败项含
+    `code`（`TOKEN_MISSING` / `COLOR_MISSING` / `TOKEN_CYCLE`）、`message` 与 `chain`（引用路径），
+    `css` 仅拼接成功项的 `--role-名称: var(--color-N);` 声明。
+- 合法但无解：`200 { "ok": true, "result": { "feasible": false } }`（不附带令牌结果）
+- 输入非法：`400 { "ok": false, "errors": [{ "code", "message", "ref" }] }`
+  （令牌结构错误的 code：`BAD_TOKEN_NAME` / `DUP_TOKEN_NAME` / `TOKEN_COUNT` / `BAD_TOKEN_TARGET`）
+
+## 目录结构
+
+```
+.
+├── Dockerfile
+├── docker-compose.yml
+├── package.json
+├── server.js            # Express 入口、/api/solve 与 /colorvision.js
+├── src
+│   ├── wcag.js          # sRGB 亮度与对比度
+│   ├── colorvision.js   # Machado 色觉模拟与 D65 Lab ΔE76（UMD，前后端共用）
+│   ├── tokens.js        # 语义色令牌引用链解析（循环/缺失/已删除颜色检测）
+│   ├── validate.js      # 请求校验（重名/自配对/非法色值/令牌结构等）
+│   └── solver.js        # 候选枚举与最优解选择（有解时附带令牌解析）
+└── public
+    ├── index.html
+    ├── styles.css
+    └── app.js
+```
